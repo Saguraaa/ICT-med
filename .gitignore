@@ -1,0 +1,47 @@
+# Credentials and local deployment configuration
+.env
+.env.*
+!.env.example
+.agentarts_config.yaml
+.agentarts_config.yml
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments and caches
+.venv*/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# IDE and editor settings
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Scratch data, downloaded SDK dependencies and generated evaluation results
+work/
+output/
+outputs/
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

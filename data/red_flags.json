@@ -1,0 +1,14 @@
+{
+  "version": "demo-1",
+  "reviewed": false,
+  "description": "仅软件测试。真实医疗规则需专业人员审定后替换，不能作为红旗覆盖清单。",
+  "rules": [
+    {
+      "id": "demo-urgent-marker",
+      "patterns": ["[demo:redflag]"],
+      "source": "synthetic software test fixture",
+      "reviewed": false,
+      "demo": true
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{"id":"single","message":"demo 普通流程","expected_route":"single"}
+{"id":"multi","message":"demo [demo:moderate]","expected_route":"multi"}
+{"id":"teams","message":"demo [demo:high]","expected_route":"multi_team"}
+{"id":"clarify","message":"demo [demo:clarify]","expected_route":"clarification"}
+{"id":"rule","message":"demo [demo:redflag]","expected_route":"safety_escalation"}
+{"id":"model-risk","message":"demo [demo:urgent]","expected_route":"safety_escalation"}
+{"id":"follow-up","message":"[demo:complete]","case_state":{"user_messages":["demo [demo:clarify]"]},"expected_route":"single"}
