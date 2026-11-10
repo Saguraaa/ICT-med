@@ -1,5 +1,9 @@
 # 医学知识与检索服务接入
 
+现已支持 [MedRAG公开教材＋SQLite BM25](MEDRAG_SETUP.md)，包括离线索引、中文检索词转换及研究隔离模式。
+下述“真实模式只使用reviewed=true”指默认 EVIDENCE_SCOPE=reviewed；显式 research 可读取未审核非演示片段，
+但真实输出发布门控始终禁止自动分诊结论，原始reviewed状态不会被改写。
+
 ## 本地 JSONL
 
 每行一个独立片段，UTF-8，至少包含：

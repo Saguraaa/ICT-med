@@ -4,6 +4,38 @@
 
 ## 已实现
 
+已增加 [MedRAG 医学语料接入](docs/MEDRAG_SETUP.md)：SQLite BM25、英文检索词转换、来源追踪及隔离的研究模式。
+
+优化模块的启用、对照实验和当前验收边界见 [优化实施记录](docs/OPTIMIZATION_IMPLEMENTATION.md)。
+本轮实际测试与缺项见 [2026-11-10 验收报告](docs/OPTIMIZATION_ACCEPTANCE_20261110.md)：50项测试通过，完整研究验收仍未完成。
+
+## 队友拉取仓库后使用聊天页面
+
+每位成员在自己的电脑运行网页客户端，联网调用已部署的 AgentArts，无需 ECS、Docker 或模型依赖。
+
+1. 安装 Python 3.12 和 Git，执行 `git clone <项目负责人提供的仓库地址>`。已拉取过则在仓库执行 `git pull`。
+2. 进入含 `chat_server.py` 的目录（仓库根目录或其 `med` 子目录），执行 `python --version` 确认 Python 可用。
+3. 首次执行 `Copy-Item .env.example .env`。已有 `.env` 不要覆盖；该文件被 Git 忽略，拉取代码不会自动获得密钥。
+4. 编辑 `.env`，添加或填写以下三项；地址和运行时入站密钥由项目负责人私下提供。
+
+```dotenv
+AGENTARTS_RUNTIME_URL=负责人提供的完整HTTPS调用地址
+AGENTARTS_RUNTIME_KEY=负责人提供的运行时入站APIKey值
+CHAT_ACCESS_CODE=
+```
+
+密钥只填值，不加 `Bearer`；无需填写 DeepSeek 密钥。口令可留空。
+
+5. 执行 `python chat_server.py`，保持终端运行，手动打开 http://localhost:8090 。每个人访问自己的 localhost，互不冲突，负责人电脑无需保持开机。
+6. 发送合成病例，按追问补充；页面自动维护上下文。“新建对话”或刷新会清空上下文。按 Ctrl+C 停止服务。
+
+本客户端仅需 Python 标准库，不用安装 `requirements.txt`。若 `python` 不可用，可尝试 `py -3`。
+8090 被占用可用 `python chat_server.py --port 8091` 并打开 http://localhost:8091 。
+502 时查看页面具体提示：401 检查入站密钥、404 检查地址、超时检查网络和运行时；修改 `.env` 后重启。
+如 shell 已设置同名环境变量，它们优先于 `.env`，需更新或清除旧值。
+`no_reviewed_evidence` 表示云端尚无可用审核资料，属于智能体业务结果。
+运行时密钥保留在成员本机，因此成员可读取它；不要提交 `.env` 或将密钥贴入测试记录。
+
 - 按风险、信息完整度和复杂度决策：追问、单专家、小组、多团队或人工升级。
 - 从全科、呼吸、心血管、消化角色池动态选择参与者（有限角色池，不是任意生成专科）。
 - 小组讨论有轮次上限和主持者复核；所有参与者读取上一轮全体意见。
@@ -94,3 +126,11 @@ python evaluation.py --strategy fixed_multi --output work/fixed_multi.json
 - 截止时间在阶段之间检查，并限制每个网络操作的超时；不是可以强制终止任意上游计算的硬实时期限。上游报错不会输出原始响应体或密钥。
 - `reports`、`case_state` 和 `retrieved_evidence` 包含敏感业务内容，面向终端用户只展示 `response` 与适用的来源；开发追踪信息限授权人员访问。代码默认不记录患者文本，但 AgentArts 自身的调用日志仍需在控制台按部署要求配置。
 - `MODEL_BACKEND=demo` 只能演示流程，不能用于患者服务。第一版不包含真实医疗数据、真实人工接诊连接、医学图像输入和论文全量基准结果。
+## 多 Agent 优化规划
+
+融合选择性协作、缺口驱动检索和证据优先整合的设计、实施顺序、对照实验与提升率计算，见 [优化与验收方案](docs/OPTIMIZATION_PLAN.md)。最终报告采用 [验收报告模板](docs/OPTIMIZATION_ACCEPTANCE_TEMPLATE.md)，分别报告单项、融合及消融结果。当前为规划阶段，尚无优化后的医学实测提升率。
+
+# 团队聊天测试页面
+
+新增独立网页网关，启动、内网分享和 ECS 部署见 [团队聊天页面](docs/TEAM_CHAT.md)。
+浏览器通过网关调用现有 AgentArts 运行时，自动传回多轮上下文，运行时密钥保留在服务端。
