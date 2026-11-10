@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>医路智分 · 团队测试</title>
+<style>
+:root{font:16px/1.65 system-ui,"Microsoft YaHei",sans-serif;color:#183347;background:#f2f6f9}*{box-sizing:border-box}body{margin:0}main{max-width:880px;margin:auto;padding:28px 20px}header{display:flex;align-items:center;justify-content:space-between;gap:20px}h1{font-size:26px;margin:0}small,.muted{color:#526777}button,input,textarea{font:inherit}button{min-height:44px;border:1px solid #c5d3dd;background:white;color:#183347;padding:8px 18px;border-radius:10px;cursor:pointer}button:hover{background:#eaf2f8}button:disabled{opacity:.55;cursor:wait}input,textarea{border:1px solid #bccbd7;border-radius:10px;padding:10px;background:white;color:inherit;width:100%}:focus-visible{outline:3px solid #0284c7;outline-offset:3px}.access{display:flex;align-items:end;gap:12px;margin:24px 0 16px}.access label{flex:1}.notice{background:#e5f1f8;border-left:3px solid #2877a4;padding:12px 16px;border-radius:6px}#messages{min-height:220px;padding:12px 0}.bubble{background:white;border:1px solid #dce5eb;border-radius:14px;padding:16px 20px;margin:14px 0;white-space:pre-wrap;overflow-wrap:anywhere}.user{background:#e6f3f0;border-color:#b9d9d0;margin-left:48px}.role{font-size:13px;font-weight:650;color:#466074;margin-bottom:6px}details{white-space:normal;font-size:14px;margin-top:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;background:#f2f6f9;padding:12px}textarea{resize:vertical;min-height:100px}.actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:10px}#send{background:#126586;color:white;border-color:#126586}#error{color:#a12525;min-height:26px}label{display:block;font-weight:600}footer{font-size:13px;color:#526777;margin-top:24px}@media(max-width:540px){main{padding:20px 14px}.user{margin-left:20px}.access{display:block}.access button{margin-top:10px}h1{font-size:22px}}
+</style>
+<main>
+<header><div><small>MEDROUTE / 团队测试</small><h1>医路智分</h1></div><button id="reset" type="button">新建对话</button></header>
+<p class="notice">用于合成病例和流程测试，不替代医生诊断。资料尚未接入时，系统可能转入人工处理提示；当前不代表已连接医务人员。</p>
+<div class="access"><label for="code">团队测试口令<input id="code" type="password" autocomplete="off" placeholder="由项目负责人提供"></label></div>
+<section id="messages" aria-label="对话记录" aria-live="polite"><p class="muted" id="empty">输入一个合成病例，开始测试。系统追问后可直接在下方补充。</p></section>
+<form id="form"><label for="message">描述问题或补充信息</label><textarea id="message" maxlength="4000" required placeholder="例如：合成测试案例，成年人，轻微咳嗽两天……"></textarea><div class="actions"><span id="status" role="status">准备就绪</span><button id="send" type="submit">发送消息</button></div><div id="error" role="alert"></div></form>
+<footer>上下文仅保存在当前页面内存中。刷新或新建对话会清空；每次调用会产生平台及模型费用。</footer>
+</main>
+<script>
+const newSession=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');
+let state={},session=newSession();
+const $=id=>document.getElementById(id);
+const accessRequired=__ACCESS_REQUIRED__;
+if(!accessRequired)$('code').closest('.access').style.display='none';
+function bubble(role,text,result){
+  $('empty')?.remove();
+  const box=document.createElement('article');box.className='bubble'+(role==='你'?' user':'');
+  const label=document.createElement('div');label.className='role';label.textContent=role;box.append(label);
+  const content=document.createElement('div');content.textContent=text;box.append(content);
+  if(result){const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent='查看测试详情（状态、路由、引用及请求编号）';pre.textContent=JSON.stringify(result,null,2);details.append(summary,pre);box.append(details);}
+  $('messages').append(box);box.scrollIntoView({block:'nearest'});
+}
+$('reset').onclick=()=>{state={};session=newSession();$('messages').replaceChildren();$('error').textContent='';$('status').textContent='已开始新对话';$('message').value='';$('message').focus();};
+$('form').onsubmit=async event=>{
+  event.preventDefault();const message=$('message').value.trim(),code=$('code').value;
+  if(!message||(accessRequired&&!code)){$('error').textContent=accessRequired?'请填写测试口令和消息。':'请填写消息。';return;}
+  $('send').disabled=true;$('reset').disabled=true;$('error').textContent='';$('status').textContent='正在评估，请稍候……';
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),130000);
+  try{
+    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+code},body:JSON.stringify({message,case_state:state,session_id:session}),signal:controller.signal});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'调用失败');
+    bubble('你',message);bubble('医路智分',result.response||'本次未返回答复，请查看测试详情。',result);
+    if(result.case_state)state=result.case_state;
+    $('message').value='';$('status').textContent=({completed:'评估完成',need_more_info:'请补充信息',handoff:'需要人工处理',escalated:'风险升级',error:'处理异常'})[result.status]||'已收到回复';
+  }catch(error){$('error').textContent=error.name==='AbortError'?'等待超时，可稍后重试。':error.message;$('status').textContent='发送未完成，输入内容已保留';}
+  finally{clearTimeout(timer);$('send').disabled=false;$('reset').disabled=false;}
+};
+</script>
+</html>
