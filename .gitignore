@@ -40,6 +40,9 @@ work/
 output/
 outputs/
 *.log
+data/*.sqlite
+data/*.sqlite-*
+data/*.manifest.json
 
 # OS metadata
 .DS_Store

@@ -5,6 +5,8 @@ from agents import Budget, ModelClient, ModelOutputError, ServiceFailure
 from config import Settings
 from prompts import SPECIALTIES
 from retrieval import Retriever
+from collaboration import build_context, latest_reports, select_roles, validate_action
+from evidence_loop import apply_retrieval
 from safety import (check_claims, read_rules, rules_ready, screen, strings,
                     validate_expert, validate_review)
 
@@ -121,17 +123,55 @@ class MedRoute:
             if not evidence:
                 return handoff('no_reviewed_evidence')
             allowed_ids = {doc['id'] for doc in evidence}
+            optimization = (self.settings.collab_policy != 'baseline'
+                            or self.settings.evidence_policy != 'baseline')
+            open_issues, seen_queries = [], set()
+            extra_rounds = 0
+            requested_roles = []
+
+            def review_action(opinions):
+                value = self.model.complete('moderator', {
+                    'case': triage, 'opinions': opinions, 'evidence': evidence,
+                    'previous_reports': latest_reports(out['reports']),
+                    'structured_action': True, 'roles': ['general'] if complexity == 'low' else roles,
+                    'open_issues': open_issues,
+                }, budget)
+                validate_review(value)
+                if value['needs_escalation']:
+                    return value, {'action': 'handoff', 'issues': []}
+                return value, validate_action(value.get('review_action'),
+                    ['general'] if complexity == 'low' else roles, allowed_ids)
+
+            def supplement(action):
+                nonlocal evidence, extra_rounds
+                if (self.settings.evidence_policy != 'gap_driven'
+                        or extra_rounds >= self.settings.max_extra_retrieval_rounds):
+                    raise ServiceFailure('supplemental_retrieval_unavailable')
+                extra_rounds += 1
+                updated = apply_retrieval(action, evidence, self.retriever, budget, seen_queries,
+                    demo=self.settings.backend == 'demo', max_queries=self.settings.max_followup_queries,
+                    research=self.settings.evidence_scope == 'research')
+                if len(updated) == len(evidence):
+                    raise ServiceFailure('no_new_evidence')
+                evidence = updated
+                allowed_ids.update(d['id'] for d in evidence)
+                out['retrieved_evidence'] = evidence
 
             def expert(role, stage, previous=None, feedback=''):
                 report = validate_expert(self.model.complete('expert', {
                     'role': SPECIALTIES[role], 'stage': stage, 'messages': messages,
                     'case': triage, 'evidence': evidence,
-                    'previous_reports': list(out['reports']),
-                    'previous_opinions': previous or [], 'feedback': feedback,
+                    'previous_reports': (build_context(role, out['reports'], open_issues)
+                        if self.settings.collab_policy != 'baseline' else list(out['reports'])),
+                    'previous_opinions': (build_context(role, previous or [], open_issues)
+                        if self.settings.collab_policy != 'baseline' else previous or []), 'feedback': feedback,
                 }, budget))
                 if any(eid not in allowed_ids for eid in report['evidence_ids']):
                     raise ModelOutputError('expert_unknown_citation')
-                report = report | {'role': role, 'stage': stage}
+                report = report | {'role': role, 'stage': stage,
+                    'report_id': 'report-' + str(len(out['reports']) + 1),
+                    'addressed_issue_ids': [i['id'] for i in open_issues
+                                           if role in i.get('affected_roles', [])]}
                 out['reports'].append(report)
                 budget.trace.append({'event': 'expert_report', 'role': role, 'stage': stage})
                 return report
@@ -156,7 +196,28 @@ class MedRoute:
                 if report['needs_escalation']:
                     return handoff('expert_escalation', urgent=True)
                 if report['uncertainties']:
-                    return handoff('unresolved_expert_uncertainty')
+                    if not optimization:
+                        return handoff('unresolved_expert_uncertainty')
+                    review, action = review_action([report])
+                    open_issues = action.get('issues', [])
+                    if review['needs_escalation']:
+                        return handoff('moderator_escalation', urgent=True)
+                    if action['action'] == 'clarify':
+                        return finish('need_more_info', 'clarification', '\n'.join(action['questions']))
+                    if action['action'] != 'retrieve':
+                        return handoff('unresolved_expert_uncertainty')
+                    supplement(action)
+                    report = expert('general', 'supplemental_review')
+                    if report['needs_escalation']:
+                        return handoff('expert_escalation', urgent=True)
+                    if report['uncertainties']:
+                        return handoff('unresolved_expert_uncertainty')
+                    review, action = review_action([report])
+                    open_issues = action.get('issues', [])
+                    if review['needs_escalation']:
+                        return handoff('moderator_escalation', urgent=True)
+                    if action['action'] != 'stop':
+                        return handoff('supplemental_review_unresolved')
             else:
                 if complexity == 'high':
                     report = expert('general', 'initial_assessment_team')
@@ -166,23 +227,47 @@ class MedRoute:
                 for round_no in range(1, self.settings.max_rounds + 1):
                     # Every participant sees the complete previous round, not a partial empty log.
                     current = []
-                    for role in roles:
+                    selected = roles
+                    if round_no > 1 and self.settings.collab_policy == 'selective':
+                        selected = select_roles(open_issues, previous, roles)
+                        selected = [role for role in roles if role in selected or role in requested_roles]
+                        if not selected:
+                            selected = roles
+                            budget.trace.append({'event': 'selection_fallback'})
+                    for role in selected:
                         report = expert(role, f'specialist_round_{round_no}', previous, feedback)
                         current.append(report)
                         if report['needs_escalation']:
                             return handoff('specialist_escalation', urgent=True)
-                    review = validate_review(self.model.complete('moderator', {
+                    if optimization:
+                        review, action = review_action(latest_reports(out['reports']))
+                        open_issues = action.get('issues', [])
+                        requested_roles = action.get('selected_roles', [])
+                        out['issues'] = open_issues
+                        budget.trace.append({'event': 'review_action', 'action': action})
+                        if review['needs_escalation']:
+                            return handoff('moderator_escalation', urgent=True)
+                        if action['action'] == 'clarify':
+                            return finish('need_more_info', 'clarification', '\n'.join(action['questions']))
+                        if action['action'] == 'handoff':
+                            return handoff('review_action_handoff')
+                        if action['action'] == 'retrieve':
+                            supplement(action)
+                        review['stop'] = action['action'] == 'stop'
+                    else:
+                        review = validate_review(self.model.complete('moderator', {
                         'case': triage, 'opinions': current, 'evidence': evidence,
                         'previous_reports': out['reports'],
-                    }, budget))
+                        }, budget))
                     budget.trace.append({'event': 'discussion_review', 'round': round_no,
                                          'stop': review['stop']})
                     if review['needs_escalation']:
                         return handoff('moderator_escalation', urgent=True)
-                    if review['stop'] and not any(r['uncertainties'] for r in current):
+                    effective = latest_reports(out['reports']) if optimization else current
+                    if review['stop'] and not any(r['uncertainties'] for r in effective):
                         stopped = True
                         break
-                    previous, feedback = current, review['feedback']
+                    previous, feedback = effective, review['feedback']
                 if not stopped:
                     return handoff('discussion_limit_unresolved')
                 if complexity == 'high':
@@ -193,11 +278,17 @@ class MedRoute:
                         return handoff('final_team_unresolved')
 
             candidate = self.model.complete('final', {
-                'case': triage, 'messages': messages, 'reports': out['reports'], 'evidence': evidence,
+                'case': triage, 'messages': messages,
+                'reports': latest_reports(out['reports']) if optimization else out['reports'],
+                'evidence': evidence, 'issues': open_issues,
+                'integration_policy': self.settings.integration_policy,
             }, budget)
-            issues = check_claims(candidate, evidence)
             if candidate.get('care_level') == 'emergency':
                 return handoff('final_urgent', urgent=True)
+            issues = check_claims(candidate, evidence)
+            if self.settings.integration_policy == 'evidence_first':
+                from integration import validate_integration
+                out['integration'] = validate_integration(candidate, out['reports'], evidence)
             if candidate.get('care_level') == 'human' or candidate.get('uncertainties'):
                 return handoff('final_uncertainty')
             if issues:
@@ -212,7 +303,9 @@ class MedRoute:
             if not verification['supported'] or verification['issues']:
                 return handoff('evidence_support_failed')
             if self.settings.backend != 'demo' and (
-                    not self.settings.enable_triage_output or not rules_ready(rules)):
+                    self.settings.evidence_scope == 'research'
+                    or any(not d.get('reviewed') for d in evidence)
+                    or not self.settings.enable_triage_output or not rules_ready(rules)):
                 return handoff('clinical_release_disabled_or_rules_unreviewed')
             budget.remaining()
             ids = {eid for claim in candidate['claims'] for eid in claim['evidence_ids']}

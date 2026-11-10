@@ -36,11 +36,27 @@ class Settings:
     api_token: str = ''
     routing_strategy: str = 'adaptive'
     json_mode: str = 'auto'
+    collab_policy: str = 'baseline'
+    evidence_policy: str = 'baseline'
+    integration_policy: str = 'baseline'
+    max_extra_retrieval_rounds: int = 1
+    max_followup_queries: int = 2
+    retrieval_backend: str = 'local'
+    medrag_index_path: Path = ROOT / 'data' / 'medrag.sqlite'
+    evidence_scope: str = 'reviewed'
 
     @classmethod
     def from_env(cls):
         load_env()
         settings = cls(
+            retrieval_backend=os.getenv('RETRIEVAL_BACKEND', 'local'),
+            medrag_index_path=Path(os.getenv('MEDRAG_INDEX_PATH', str(cls.medrag_index_path))),
+            evidence_scope=os.getenv('EVIDENCE_SCOPE', 'reviewed'),
+            collab_policy=os.getenv('COLLAB_POLICY', 'baseline'),
+            evidence_policy=os.getenv('EVIDENCE_POLICY', 'baseline'),
+            integration_policy=os.getenv('INTEGRATION_POLICY', 'baseline'),
+            max_extra_retrieval_rounds=int(os.getenv('MAX_EXTRA_RETRIEVAL_ROUNDS', '1')),
+            max_followup_queries=int(os.getenv('MAX_FOLLOWUP_QUERIES', '2')),
             backend=os.getenv('MODEL_BACKEND', 'openai'),
             model=os.getenv('MODEL_NAME', ''),
             model_url=os.getenv('MODEL_URL', cls.model_url).rstrip('/'),
@@ -62,6 +78,14 @@ class Settings:
         )
         if settings.backend not in ('demo', 'openai'):
             raise ValueError('MODEL_BACKEND must be demo or openai')
+        if settings.retrieval_backend not in ('local', 'medrag_sqlite') or settings.evidence_scope not in ('reviewed', 'research'):
+            raise ValueError('Invalid retrieval backend or evidence scope')
+        if (settings.collab_policy not in ('baseline', 'context', 'selective')
+                or settings.evidence_policy not in ('baseline', 'gap_driven')
+                or settings.integration_policy not in ('baseline', 'evidence_first')
+                or not 0 <= settings.max_extra_retrieval_rounds <= 1
+                or not 1 <= settings.max_followup_queries <= 2):
+            raise ValueError('Invalid optimization policy; finetuned is not implemented')
         if not (1 <= settings.max_calls <= 40 and 1 <= settings.max_rounds <= 3
                 and 2 <= settings.max_agents <= 3 and 1 <= settings.top_k <= 10):
             raise ValueError('Invalid call, discussion, specialist or retrieval limits')

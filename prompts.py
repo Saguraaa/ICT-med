@@ -15,6 +15,9 @@ needs_escalation=true 表示发现需及时线下处置的风险；一般资料�
 示例只说明结构；不要原样照抄占位符、解释文字或用竖线连接的多个候选值。
 '''
 TASKS = {
+    'retrieval_query': '''将输入query转换为用于英文医学教材BM25检索的简短英文关键词。
+只转换已提供的症状、病史与知识缺口，保留重要否定和时间信息，不新增诊断或患者事实。
+输出 {"query":"English medical search terms"}。query只能包含英文检索内容，最多1200字符。''',
     'triage': '''评估全部用户消息，必须返回这七个顶层字段，不增加外层包装：
 risk：字符串，只能从 routine、urgent、unknown 中选一个。
 complexity：字符串，只能从 low、moderate、high 中选一个。
@@ -54,4 +57,21 @@ care_level 必须且只能是 routine、prompt、emergency、human 中的一个�
 
 
 def system_prompt(task):
-    return BASE + TASKS[task]
+    extra = ''
+    if task == 'moderator':
+        extra = '''\n若 structured_action=true，必须额外输出 review_action 对象：
+{"action":"stop","issues":[],"selected_roles":[],"queries":[],"questions":[],"reason":"简短依据"}。
+action 仅限 stop/retrieve/reconsult/clarify/handoff。issues 每项含 id、kind、text、
+affected_roles（输入roles内标识）、evidence_ids、status（open/resolved）。
+kind 仅限 patient_fact_missing/knowledge_gap/interpretation_conflict。
+缺患者事实必须 clarify，不能检索代替。知识缺口可 retrieve，最多2条queries；
+解释冲突 reconsult 并选择相关角色。clarify最多2条questions。
+保留未决问题，不能凭多数票或预算耗尽将其标为resolved。有open问题不得stop。
+每轮根据新报告和证据重新判断旧问题是否解决。'''
+    if task == 'final':
+        extra = '''\n若 integration_policy=evidence_first，逐条核对支持和反对意见、证据适用人群及时间，
+不能按多数票定论；未决风险须保留并升级。额外输出 integration_decisions 数组，
+每条claim恰好对应一项：{"claim_index":0,"supporting_report_ids":[],
+"opposing_report_ids":[],"evidence_ids":[],"reason":"简短采纳或排除依据"}。
+claim_index从0起，报告和证据ID必须来自输入。不要输出内部思维链。'''
+    return BASE + TASKS[task] + extra

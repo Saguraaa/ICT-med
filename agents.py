@@ -31,6 +31,7 @@ class Budget:
         self.input_tokens = 0
         self.output_tokens = 0
         self.trace = []
+        self.usage_missing = False
 
     def remaining(self):
         remaining = self.deadline - time.monotonic()
@@ -46,8 +47,9 @@ class Budget:
         self.trace.append({'event': 'model_call', 'task': task})
 
     def metrics(self):
-        return {'model_calls': self.calls, 'input_tokens': self.input_tokens,
-                'output_tokens': self.output_tokens,
+        return {'model_calls': self.calls, 'input_tokens': None if self.usage_missing else self.input_tokens,
+                'output_tokens': None if self.usage_missing else self.output_tokens,
+                'total_tokens': None if self.usage_missing else self.input_tokens + self.output_tokens,
                 'elapsed_ms': round((time.monotonic() - self.started) * 1000)}
 
 
@@ -89,6 +91,20 @@ class ModelClient:
         self.settings = settings
 
     def complete(self, task, payload, budget):
+        started = time.monotonic()
+        error = None
+        try:
+            return self._complete(task, payload, budget)
+        except Exception as exc:
+            error = type(exc).__name__
+            if self.settings.backend != 'demo':
+                budget.usage_missing = True
+            raise
+        finally:
+            budget.trace.append({'event': 'stage_complete', 'task': task,
+                'elapsed_ms': round((time.monotonic()-started)*1000), 'error': error})
+
+    def _complete(self, task, payload, budget):
         budget.before_call(task)
         cfg = self.settings
         if cfg.backend == 'demo':
@@ -113,6 +129,8 @@ class ModelClient:
             raise ModelOutputError('model_invalid_response')
         try:
             usage = result.get('usage') or {}
+            if usage.get('prompt_tokens') is None or usage.get('completion_tokens') is None:
+                budget.usage_missing = True
             budget.input_tokens += int(usage.get('prompt_tokens') or 0)
             budget.output_tokens += int(usage.get('completion_tokens') or 0)
             content = result['choices'][0]['message']['content']
@@ -140,13 +158,22 @@ def demo_response(task, payload):
                 'evidence_ids': [d['id'] for d in payload['evidence'][:1]],
                 'needs_escalation': False, 'uncertainties': []}
     if task == 'moderator':
-        return {'stop': True, 'needs_escalation': False, 'feedback': '合成演示达到停止条件'}
+        result = {'stop': True, 'needs_escalation': False, 'feedback': '合成演示达到停止条件'}
+        if payload.get('structured_action'):
+            result['review_action'] = {'action': 'stop', 'issues': [], 'selected_roles': [],
+                                      'queries': [], 'questions': [], 'reason': '合成流程'}
+        return result
     if task == 'final':
         ids = [d['id'] for d in payload['evidence'][:1]]
-        return {'response': '【离线演示】已完成所选协作流程。本结果仅验证软件，不构成健康建议。',
+        result = {'response': '【离线演示】已完成所选协作流程。本结果仅验证软件，不构成健康建议。',
                 'care_level': 'routine',
                 'claims': [{'text': '该输出仅供流程测试。', 'evidence_ids': ids}],
                 'uncertainties': []}
+        if payload.get('integration_policy') == 'evidence_first':
+            result['integration_decisions'] = [{'claim_index': 0,
+                'supporting_report_ids': [r['report_id'] for r in payload['reports']],
+                'opposing_report_ids': [], 'evidence_ids': ids, 'reason': '合成软件验证'}]
+        return result
     if task == 'verify':
         return {'supported': True, 'needs_escalation': False, 'issues': []}
     raise ValueError('Unknown demo task')
